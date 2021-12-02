@@ -53,6 +53,7 @@ type ItemProductionTotals = {
 
 export type SolverResults = {
   productionGraph: ProductionGraph | null,
+  recipeGraph: ProductionGraph | null,
   report: Report | null,
   timestamp: number,
   computeTime: number,
@@ -305,8 +306,23 @@ export class ProductionSolver {
       }
       const report = this.generateProductionReport(productionGraph);
 
+      const recipeGraph = this.buildRecipeGraph();
+
+      console.log('=========================================');
+      let complexity = 1;
+      for (const [key, node] of Object.entries(recipeGraph.nodes)) {
+        if (node.type === NODE_TYPE.RECIPE) continue;
+        const recipeChoices = recipeGraph.edges.filter((e) => e.to === node.id);
+        if (recipeChoices.length > 0) {
+          complexity *= recipeChoices.length;
+          console.log(key, recipeChoices.length);
+        }
+      }
+      console.log(complexity);
+
       return {
         productionGraph,
+        recipeGraph,
         report,
         timestamp,
         computeTime: performance.now() - timestamp,
@@ -315,6 +331,7 @@ export class ProductionSolver {
     } catch (e: any) {
       return {
         productionGraph: null,
+        recipeGraph: null,
         report: null,
         timestamp,
         computeTime: performance.now() - timestamp,
@@ -745,5 +762,101 @@ export class ProductionSolver {
     report.estimatedFoundations = Math.ceil(2 * (report.totalBuildArea / 64));
 
     return report;
+  }
+
+  private buildRecipeGraph() {
+    const graph: ProductionGraph = {
+      nodes: {},
+      edges: [],
+    };
+
+    const items = [...Object.keys(this.rateTargets), ...this.maximizeTargets.map((t) => t.key)];
+    for (const itemKey of items) {
+      this.buildRecipeGraphRecursive(itemKey, null, graph);
+    }
+
+    return graph;
+  }
+
+  private buildRecipeGraphRecursive(itemKey: string, parentNode: GraphNode | null, graph: ProductionGraph) {
+    const itemInfo = items[itemKey];
+
+    let itemNode = graph.nodes[itemKey];
+    if (!itemNode) {
+      itemNode = {
+        id: nanoid(),
+        key: itemKey,
+        type: NODE_TYPE.RESOURCE,
+        multiplier: 0,
+      };
+      graph.nodes[itemKey] = itemNode;
+    }
+
+    if (parentNode) {
+      if (!graph.edges.find((e) => e.from === itemNode.id && e.to === parentNode.id)) {
+        graph.edges.push({
+          key: '',
+          from: itemNode.id,
+          to: parentNode.id,
+          productionRate: 0,
+        });
+      }
+    }
+
+    for (const recipeKey of itemInfo.producedFromRecipes) {
+      if (!this.allowedRecipes[recipeKey]) continue;
+      const recipeInfo = recipes[recipeKey];
+
+      if (recipeInfo.slug.includes('packaged_') || recipeInfo.slug.includes('unpackage_')) continue;
+
+      let recipeNode = graph.nodes[recipeKey];
+      let needsExpanded = false;
+      if (!recipeNode) {
+        recipeNode = {
+          id: nanoid(),
+          key: recipeKey,
+          type: NODE_TYPE.RECIPE,
+          multiplier: 0,
+        };
+        graph.nodes[recipeKey] = recipeNode;
+        needsExpanded = true;
+      }
+
+      if (!graph.edges.find((e) => e.from === recipeNode.id && e.to === itemNode.id)) {
+        graph.edges.push({
+          key: '',
+          from: recipeNode.id,
+          to: itemNode.id,
+          productionRate: 0,
+        });
+      }
+
+      if (!needsExpanded) continue;
+
+      for (const ingredient of recipeInfo.ingredients) {
+        if (this.inputs[ingredient.itemClass]) {
+          let ingredientNode = graph.nodes[ingredient.itemClass];
+          if (!ingredientNode) {
+            ingredientNode = {
+              id: nanoid(),
+              key: ingredient.itemClass,
+              type: NODE_TYPE.RESOURCE,
+              multiplier: 0,
+            }
+            graph.nodes[ingredient.itemClass] = ingredientNode;
+          }
+          if (!graph.edges.find((e) => e.from === ingredientNode.id && e.to === recipeNode.id)) {
+            graph.edges.push({
+              key: '',
+              from: ingredientNode.id,
+              to: recipeNode.id,
+              productionRate: 0,
+            });
+          }
+        } else {
+          this.buildRecipeGraphRecursive(ingredient.itemClass, recipeNode, graph);
+        }
+      }
+    }
   }
 }

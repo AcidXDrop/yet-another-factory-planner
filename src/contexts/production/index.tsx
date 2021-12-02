@@ -59,6 +59,7 @@ const _handleCalculateFactory = _.debounce(async (
     } catch (e: any) {
       setSolverResults({
         productionGraph: null,
+        recipeGraph: null,
         report: null,
         timestamp: performance.now(),
         computeTime: 0,
